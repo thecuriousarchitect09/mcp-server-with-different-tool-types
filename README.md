@@ -4,22 +4,10 @@ A minimal, local Python MCP server exposing 5 general-purpose tools, built
 with the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 (`FastMCP`).
 
-## Tools
-
-| Tool | Description |
-|---|---|
-| `read_file(path)` | Read a text file from the sandbox dir (`~/mcp-sandbox`) |
-| `write_file(path, content, overwrite=True)` | Write a text file into the sandbox dir |
-| `fetch_url(url, max_chars=5000)` | HTTP GET a URL, strip HTML, return text |
-| `calculate(expression)` | Safely evaluate arithmetic (no `eval()`) |
-| `run_command(command, timeout_seconds=10)` | Run a whitelisted read-only shell command |
-
-Plus one bonus MCP **resource** (`time://now`) showing that pattern too.
-
 ## 1. Install
 
 ```bash
-cd mcp-utility-server
+cd mcp-server-with-different-tool-types
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -30,80 +18,219 @@ pip install -r requirements.txt
 The SDK ships a dev inspector UI:
 
 ```bash
-mcp dev server.py
+python server.py
 ```
 
 This opens a browser UI where you can call each tool manually and see
 results — the fastest way to confirm everything works before wiring it
 into a real client.
 
-## 3. Wire it into Claude Desktop
+# MCP Server — Tools, Resources & Prompts
 
-Edit your Claude Desktop config file:
+A simple **Model Context Protocol (MCP) server built with Python** that demonstrates the core MCP concepts:
 
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+* 🔧 **Tools** — perform actions
+* 📦 **Resources** — expose data
+* 🔗 **Resource Templates** — dynamically expose data using URI parameters
+* 💬 **Prompts** — provide reusable instructions
+* 🔄 **JSON-RPC** — the protocol message format underneath MCP
 
-Add an entry under `mcpServers` (create the file/key if it doesn't exist):
+This project is designed as a simple starting point for understanding **what actually happens inside an MCP server**.
+
+---
+
+## 🏗️ What This Server Demonstrates
+
+```text
+                     MCP SERVER
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+        TOOLS         RESOURCES       PROMPTS
+          │              │              │
+          ▼              ▼              ▼
+        add()       demo://greeting   explain_topic()
+          │              │              │
+          ▼              ▼              ▼
+        ACTION          DATA        INSTRUCTION
+```
+
+### Tools
+
+The server exposes an `add` tool:
+
+```python
+add(a, b)
+```
+
+Example:
+
+```text
+add(10, 20)
+→ 30
+```
+
+MCP clients discover tools using:
+
+```text
+tools/list
+```
+
+and invoke them using:
+
+```text
+tools/call
+```
+
+---
+
+### Resources
+
+The server exposes a static resource:
+
+```text
+demo://greeting
+```
+
+Reading this resource returns:
+
+```text
+Hello from my MCP server!
+```
+
+Resources are discovered using:
+
+```text
+resources/list
+```
+
+and read using:
+
+```text
+resources/read
+```
+
+---
+
+### Resource Templates
+
+The server also demonstrates a dynamic resource:
+
+```text
+demo://user/{name}
+```
+
+For example:
+
+```text
+demo://user/alice
+```
+
+returns:
+
+```text
+User name: alice
+Status: Active
+```
+
+This demonstrates how MCP resource templates can expose dynamically generated data through URI parameters.
+
+---
+
+### Prompts
+
+The server exposes a reusable prompt:
+
+```text
+explain_topic
+```
+
+For example:
+
+```text
+explain_topic("MCP")
+```
+
+generates a structured instruction asking an AI model to explain MCP in simple terms.
+
+Prompts are discovered using:
+
+```text
+prompts/list
+```
+
+and retrieved using:
+
+```text
+prompts/get
+```
+
+---
+
+# 🔄 MCP JSON-RPC Flow
+
+MCP uses **JSON-RPC** messages to communicate between the client and server.
+
+For example, to discover available tools:
 
 ```json
 {
-  "mcpServers": {
-    "utility-server": {
-      "command": "/absolute/path/to/mcp-utility-server/.venv/bin/python",
-      "args": ["/absolute/path/to/mcp-utility-server/server.py"]
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list"
+}
+```
+
+To call the `add` tool:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "add",
+    "arguments": {
+      "a": 10,
+      "b": 20
     }
   }
 }
 ```
 
-Use **absolute paths** — relative paths and `~` are unreliable here.
-Restart Claude Desktop. You should see a 🔨 tools icon indicating the
-server connected, and the 5 tools available in chat.
+The important idea is:
 
-## 4. Wire it into other clients
+```text
+JSON-RPC
+   ↓
+Message format
 
-Any MCP client that supports stdio servers works the same way: point it
-at the Python interpreter in `.venv` and `server.py` as the argument.
-Claude Code, Cursor, and other MCP-aware tools use a similar
-`command` + `args` config shape.
+MCP
+   ↓
+Defines what the messages mean
 
-## Security notes (read this)
-
-This server runs real code on your machine, so a few deliberate limits
-are built in — widen them only if you understand the tradeoff:
-
-- **`read_file` / `write_file`** are sandboxed to `~/mcp-sandbox` and
-  will refuse any path that resolves outside it (blocks `../../etc/passwd`
-  style escapes).
-- **`run_command`** only allows a short allowlist of read-only commands
-  (`ls`, `pwd`, `whoami`, `date`, `echo`, `cat`, `df`, `uname`). It does
-  **not** run through a shell (`subprocess.run` with a list, not
-  `shell=True`), so shell metacharacters (`;`, `&&`, `|`, backticks)
-  don't do anything special — they're just treated as literal arguments.
-- **`calculate`** parses the expression with `ast` and only allows
-  numeric arithmetic — it never calls Python's `eval()`.
-- **`fetch_url`** only allows `http(s)://` and has a 10s timeout.
-
-If you want the file tools to reach outside the sandbox, or the shell
-tool to run arbitrary commands, edit `BASE_DIR` / `ALLOWED_COMMANDS` in
-`server.py` directly rather than removing the checks.
-
-## Extending
-
-Add a new tool by writing a plain Python function and decorating it:
-
-```python
-@mcp.tool()
-def my_tool(x: int, y: str = "default") -> str:
-    """One-line description the client/model sees.
-
-    Args:
-        x: what x is
-        y: what y is
-    """
-    return f"{y}: {x}"
+tools/list
+tools/call
+resources/list
+resources/read
+prompts/list
+prompts/get
+   ↓
+MCP operations
 ```
 
-Type hints and the docstring are what the MCP client shows the model —
-keep them accurate, since that's how the model decides when to call it.
+---
+
+# 🧠 MCP Concepts at a Glance
+
+| Concept           | Purpose               | Example              |
+| ----------------- | --------------------- | -------------------- |
+| Tool              | Perform an action     | `add()`              |
+| Resource          | Expose data           | `demo://greeting`    |
+| Resource Template | Dynamic data          | `demo://user/{name}` |
+| Prompt            | Reusable instructions | `explain_topic()`    |
+| JSON-RPC          | Communication format  | `tools/call`         |
+
+---
+
